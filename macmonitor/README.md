@@ -10,7 +10,6 @@ macOS 菜单栏系统监测工具，**内置软件管理**（安装 / 卸载 / �
 ## 快速开始
 
 ```sh
-chmod +x build.sh package.sh     # 从 git 拉下来的脚本没有可执行位
 ./build.sh                       # → build/MacMonitor.app
 open build/MacMonitor.app        # 菜单栏出现圆环
 ```
