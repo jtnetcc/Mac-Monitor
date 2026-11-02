@@ -10,8 +10,8 @@ macOS 上的软件安装 / 卸载 / 残留清理工具。原生 SwiftUI 图形�
 
 | 目录 | 形态 | 说明 |
 | --- | --- | --- |
-| [`macapp-gui/`](macapp-gui/) | SwiftUI 图形应用 | 独立的软件管家，打包成 `.app` / `.dmg`，双击即用 |
-| [`macmonitor/`](macmonitor/) | SwiftUI 菜单栏应用 | **整合版**：系统监测（CPU / 内存 / 网络 / 温度 / 进程）+ 软件管家，合成一个 app |
+| [`macapp-gui/`](macapp-gui/) | SwiftUI 图形应用 | 独立的软件管家，v1.5，打包成 `.app` / `.dmg`，双击即用 |
+| [`macmonitor/`](macmonitor/) | SwiftUI 菜单栏应用 | **整合版** v1.3：系统监测（CPU / 内存 / 网络 / 温度 / 进程）+ 软件管家，合成一个 app |
 | [`macapp/`](macapp/) | Python 命令行 | 早期版本，逻辑与 GUI 版一致，适合脚本化和审计 |
 
 `macapp-gui` 和 `macmonitor` 共用同一套卸载引擎——整合版的 `Sources/Manager/`
@@ -73,6 +73,9 @@ macOS **没有**公开的「应用上次启动时间」接口。实测全盘 338
 | v1.3 | [`MacAppManager-1.3.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/v1.3/MacAppManager-1.3.dmg) | 修复残留扫描误判 |
 | v1.2 | [`MacAppManager-1.2.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/v1.2/MacAppManager-1.2.dmg) | ⚠️ 归档，含数据丢失缺陷，勿用 |
 | v1.1 | [`MacAppManager-1.1.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/v1.1/MacAppManager-1.1.dmg) | ⚠️ 归档，含数据丢失缺陷，勿用 |
+
+v1.5 目前只有源码，没有发布 dmg —— 两个 SwiftUI 版本都可以用 `./build.sh` / `./package.sh`
+自己构建，不需要开发者证书（ad-hoc 签名，本机可用）。
 
 全部版本：<https://github.com/jtnetcc/mac-software-manager/releases>
 

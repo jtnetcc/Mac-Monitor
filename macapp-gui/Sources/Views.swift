@@ -114,7 +114,10 @@ struct ContentView: View {
                 .lineLimit(1)
             Spacer(minLength: 8)
             if store.isBusy {
-                ProgressView().controlSize(.small)
+                // 不用 ProgressView：它是无限循环动画，每一帧都会让整个窗口失效重排。
+                // 列表里有 78 行的时候，重排比一帧还慢，主线程就再也回不到 runloop 了——
+                // 实测表现是「扫描中」一直转圈、点不动、CPU 100%（详见 README 坑 13）。
+                BusyDot()
             }
             Button {
                 if store.mode == .orphans { store.scanOrphans() } else { store.refresh() }
@@ -470,7 +473,7 @@ struct RecommendView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if store.isBusy && store.apps.isEmpty {
-                    ProgressView().controlSize(.small)
+                    BusyDot()
                 }
                 if !items.isEmpty {
                     Text("可释放 \(ByteFormat.string(store.recommendedBytes))")
@@ -1808,6 +1811,19 @@ struct EmptyStateView: View {
     }
 }
 
+/// 静态的「正在忙」标记。
+///
+/// 故意不做动画：`ProgressView()` 那种无限旋转每帧都会让窗口失效重排，
+/// 列表一长（78 行）单次重排就超过一帧，主线程被彻底占住，
+/// 连 `DispatchQueue.main.async` 的回调都排不进来——界面就永远停在「扫描中」。
+struct BusyDot: View {
+    var body: some View {
+        Image(systemName: "hourglass")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.secondary)
+    }
+}
+
 struct CenteredHint: View {
     let icon: String
     let title: String
@@ -1815,7 +1831,9 @@ struct CenteredHint: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            ProgressView().controlSize(.regular)
+            Image(systemName: icon)
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(.tertiary)
             Text(title.isEmpty ? "处理中…" : title)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)

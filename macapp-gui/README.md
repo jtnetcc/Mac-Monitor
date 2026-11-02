@@ -13,7 +13,7 @@
 ## 安装
 
 ```sh
-open "dist/Mac软件管家-1.3.dmg"
+open "dist/Mac软件管家-1.5.dmg"
 ```
 
 把 `Mac软件管家` 拖进 Applications 即可。已经做了 ad-hoc 签名，本机双击就能用。
@@ -195,11 +195,41 @@ v1.2 之前这里有个真 bug，也是三个最容易踩的坑：
 | 先预检再动手   | 废纸篓不可写就整体中止，一个文件都不动                                                                                     |
 | 失败即停     | 应用本体删不掉就中止，不继续碰残留                                                                                       |
 
+## 扫描性能（v1.5）
+
+点开一个应用要扫的不止本体，`~/Library` 下可能有几个 GB 的容器。冷缓存遍历
+686 MB 的微信容器，`du` 实测要 5.2 秒——这不是算法慢，是磁盘要给。所以做了四件事：
+
+| 改动 | 效果 |
+| --- | --- |
+| 先收集候选路径，去重之后再算体积 | 同一个目录不再被整棵遍历两遍（微信 383+185 ms → 一次） |
+| 体积改用 `fts(3)`，不再走 `URLResourceValues` | 热缓存 383 ms → 176 ms，和 `du` 打平 |
+| 清单先出、体积后填 | 用户看到列表：几百毫秒 → 30~90 ms |
+| 体积按路径缓存 5 分钟 | 切走再切回来 8~9 ms |
+
+顺带修了两个真问题：
+
+- **体积口径**：`totalFileAllocatedSize` 对 APFS 透明压缩的文件报的是逻辑大小，
+  比实际占用大 30%（豆包本体 1.8 GB → 1.2 GB）。`st_blocks * 512` 才和 `du` 一致。
+- **假死**：`ProgressView()` 的无限旋转动画每帧都让窗口失效重排，列表有 78 行时
+  单次重排超过一帧，主线程永远在「失效 → 重排」，`DispatchQueue.main.async` 的
+  完成回调排不进来——界面就永远停在「正在扫描…」，CPU 100%。所有 `ProgressView`
+  换成静态图标。
+
+调试入口 `--scan-timing <应用名>` 可以把三段分别打出来：
+
+```
+完整 scan()：
+     106 ms  清单就绪（用户看到列表）
+     297 ms  冷缓存跑完（含算体积）
+       8 ms  热缓存再跑一遍
+```
+
 ## 从源码构建
 
 ```sh
 ./build.sh      # 输出 dist/Mac软件管家.app
-./package.sh    # 输出 dist/Mac软件管家-1.3.dmg
+./package.sh    # 输出 dist/Mac软件管家-1.5.dmg
 ```
 
 需要 macOS 14+ 与命令行工具。注意：**macOS 27 SDK 里的 SwiftUI 把 `@State` 等属性包装器改成了宏**，而命令行工具不附带 `SwiftUIMacros` 插件，直接编译会报 `external macro implementation type 'SwiftUIMacros.StateMacro' could not be found`。所以 `build.sh` 固定使用 `MacOSX26.5.sdk`：

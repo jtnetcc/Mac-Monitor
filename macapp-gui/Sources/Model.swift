@@ -280,6 +280,8 @@ struct ScanPlan {
     var notes: [String]
     /// 应用在用户文件夹里留下的东西，需要用户自己决定要不要删
     var localFiles: [ResidueItem] = []
+    /// 体积还在后台算（清单先出来了）。此时 size 为 0 的行显示「—」
+    var sizesPending: Bool = false
 
     var allItems: [ResidueItem] { [appItem] + items }
     var selectedItems: [ResidueItem] { items.filter { $0.selected } }

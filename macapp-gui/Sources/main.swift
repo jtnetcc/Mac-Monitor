@@ -24,6 +24,11 @@ struct MacAppMain: App {
             SelfTest.dumpRecommend()
             exit(0)
         }
+        if let index = CommandLine.arguments.firstIndex(of: "--scan-timing"),
+           CommandLine.arguments.count > index + 1 {
+            Scanner.timingReport(CommandLine.arguments[index + 1])
+            exit(0)
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--snapshot-orphan-sheet"),
            CommandLine.arguments.count > index + 1 {
             let path = CommandLine.arguments[index + 1]

@@ -116,6 +116,54 @@ enum Scanner {
 
     // MARK: - 体积
 
+    /// 调试用：`--scan-timing` 打开后记录每次体积计算的耗时
+    static var timingEnabled = false
+    nonisolated(unsafe) static var slowSizes: [(path: String, seconds: Double, files: Int)] = []
+    private static let timingLock = NSLock()
+
+    // 体积缓存。
+    //
+    // 冷缓存遍历一个 686 MB 的容器要 5 秒（`du` 实测），热缓存 0.17 秒，
+    // 差 30 倍。而同一个目录在一次会话里会被反复问：
+    // 刷新列表的 enrich 要问一次、点开应用要问一次、切走再切回来又问一次。
+    // 缓存 5 分钟，删除操作后整体失效。
+    private static let sizeCacheLock = NSLock()
+    nonisolated(unsafe) private static var sizeCache: [String: (bytes: Int64, at: Date)] = [:]
+    private static let sizeCacheTTL: TimeInterval = 300
+
+    static func clearSizeCache() {
+        sizeCacheLock.lock()
+        sizeCache.removeAll()
+        sizeCacheLock.unlock()
+
+        pkgIDCacheLock.lock()
+        pkgIDCache.removeAll()
+        pkgIDCacheLock.unlock()
+    }
+
+    private static func cachedSize(_ path: String) -> Int64? {
+        sizeCacheLock.lock()
+        defer { sizeCacheLock.unlock() }
+        guard let hit = sizeCache[path] else { return nil }
+        if Date().timeIntervalSince(hit.at) > sizeCacheTTL {
+            sizeCache[path] = nil
+            return nil
+        }
+        return hit.bytes
+    }
+
+    private static func storeSize(_ path: String, _ bytes: Int64) {
+        sizeCacheLock.lock()
+        sizeCache[path] = (bytes, Date())
+        sizeCacheLock.unlock()
+    }
+
+    /// 目录占用（已分配大小，和 `du` 一个口径）。
+    ///
+    /// 不用 `FileManager.enumerator` + `URLResourceValues`：那样每个文件要过一次
+    /// `URL` → `NSURL` → `getattrlist`，微信容器 3739 个文件实测 383 ms。
+    /// 这里换成 `fts(3)`——`du` 自己就是这么走的，一次 `getattrlistbulk` 拿一批
+    /// 目录项，`fts_statp` 直接带着 `st_blocks`，不用再 stat。
     static func size(of path: String) -> Int64 {
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -125,17 +173,42 @@ enum Scanner {
             return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         }
 
-        var total: Int64 = 0
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey]
-        if let en = fm.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: Array(keys), options: [], errorHandler: nil) {
-            for case let fileURL as URL in en {
-                guard let values = try? fileURL.resourceValues(forKeys: keys) else { continue }
-                if values.isRegularFile == true {
-                    total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
-                }
-            }
+        if let hit = cachedSize(path) { return hit }
+
+        let started = timingEnabled ? Date() : nil
+        let (total, files) = walkSize(path)
+        storeSize(path, total)
+        if let started {
+            let dt = Date().timeIntervalSince(started)
+            timingLock.lock()
+            slowSizes.append((path, dt, files))
+            timingLock.unlock()
         }
         return total
+    }
+
+    /// `fts` 遍历：FTS_PHYSICAL 不跟随符号链接，跳过目录本身，只累加普通文件。
+    private static func walkSize(_ path: String) -> (bytes: Int64, files: Int) {
+        guard let cPath = strdup(path) else { return (0, 0) }
+        defer { free(cPath) }
+
+        var argv: [UnsafeMutablePointer<CChar>?] = [cPath, nil]
+        let stream: UnsafeMutablePointer<FTS>? = argv.withUnsafeMutableBufferPointer {
+            fts_open($0.baseAddress, FTS_PHYSICAL | FTS_NOCHDIR, nil)
+        }
+        guard let stream else { return (0, 0) }
+        defer { fts_close(stream) }
+
+        var total: Int64 = 0
+        var files = 0
+        while let ent = fts_read(stream) {
+            let node = ent.pointee
+            // FTS_F = 8：普通文件；FTS_NS/FTS_ERR/FTS_DNR 是读不到的，跳过
+            guard node.fts_info == FTS_F, let stat = node.fts_statp else { continue }
+            total += Int64(stat.pointee.st_blocks) * 512
+            files += 1
+        }
+        return (total, files)
     }
 
     /// 磁盘总容量与可用空间，用于算「这个应用占硬盘多少」
@@ -404,25 +477,45 @@ enum Scanner {
 
     // MARK: - 残留扫描
 
-    static func scan(_ app: AppInfo, includeLow: Bool) -> ScanPlan {
+    /// 扫描结果分两步产出：
+    ///
+    /// 1. `collect` 只把「候选路径」凑齐，几乎不碰磁盘（毫秒级）
+    /// 2. `assemble` 填体积，多核并行
+    ///
+    /// 中间通过 `onPartial` 先甩一份「清单已就绪、体积待填」的结果出去。
+    /// 冷缓存下遍历一个 686 MB 的容器要好几秒（`du` 实测 5.2s），
+    /// 界面不该为这个一直转圈。
+    struct Collected {
+        var app: AppInfo
+        var candidates: [Candidate]
+        var notes: [String]
+        var appItem: ResidueItem
+        var local: [ResidueItem]
+    }
+
+    static func collect(_ app: AppInfo, includeLow: Bool) -> Collected {
         let rules = loadRules()
-        var buckets: [String: ResidueItem] = [:]
         var notes: [String] = []
 
-        func add(_ item: ResidueItem?) {
-            guard let item else { return }
-            if item.path == app.path || item.path.hasPrefix(app.path + "/") { return }
-            let key = (item.path as NSString).resolvingSymlinksInPath
-            if let existing = buckets[key] {
-                if item.confidence < existing.confidence {
-                    buckets[key] = ResidueItem(
-                        path: existing.path, label: existing.label, confidence: item.confidence,
-                        size: existing.size, privileged: existing.privileged, selected: existing.selected
-                    )
-                }
+        // 只收集候选路径，不碰体积。
+        // 之前是先 makeItem（顺手把体积算完）再按解析后的路径去重，
+        // 结果是同一个目录被整棵遍历两遍——微信容器 3739 个文件，
+        // 383 ms + 185 ms，白白多花一半时间。
+        var candidates: [String: Candidate] = [:]
+
+        func offer(_ candidate: Candidate?) {
+            guard let candidate else { return }
+            if candidate.path == app.path || candidate.path.hasPrefix(app.path + "/") { return }
+            let key = (candidate.path as NSString).resolvingSymlinksInPath
+            guard let existing = candidates[key] else {
+                candidates[key] = candidate
                 return
             }
-            buckets[key] = item
+            // 同一个路径被多条规则命中时，取更保守（置信度更低）的那个标签
+            if candidate.confidence < existing.confidence {
+                candidates[key] = Candidate(path: existing.path, label: existing.label,
+                                            confidence: candidate.confidence)
+            }
         }
 
         let ctx: [String: String] = [
@@ -434,35 +527,82 @@ enum Scanner {
         for tpl in rules.templates {
             if tpl.path.contains("{bundle_id}") && app.bundleID.isEmpty { continue }
             guard let filled = fill(tpl.path, ctx) else { continue }
-            add(makeItem(
-                filled,
-                label: tpl.label,
-                confidence: Confidence(rawValue: tpl.confidence) ?? .medium
-            ))
+            offer(candidate(filled, label: tpl.label,
+                            confidence: Confidence(rawValue: tpl.confidence) ?? .medium))
         }
 
         for glob in rules.globs {
             if glob.pattern.contains("{bundle_id}") && app.bundleID.isEmpty { continue }
             guard let filled = fill(glob.pattern, ctx) else { continue }
             for hit in expandGlob(filled) {
-                add(makeItem(hit, label: glob.label, confidence: Confidence(rawValue: glob.confidence) ?? .medium))
+                offer(candidate(hit, label: glob.label,
+                                confidence: Confidence(rawValue: glob.confidence) ?? .medium))
             }
         }
 
         if includeLow {
             for path in groupContainers(app) {
-                add(makeItem(path, label: "共享容器", confidence: .low))
+                offer(candidate(path, label: "共享容器", confidence: .low))
             }
             for path in fuzzyDirs(app) {
-                add(makeItem(path, label: "疑似数据目录", confidence: .low))
+                offer(candidate(path, label: "疑似数据目录", confidence: .low))
             }
         }
 
-        let (pkgItems, pkgNotes) = pkgResidues(app)
-        for item in pkgItems { add(item) }
-        notes.append(contentsOf: pkgNotes)
+        let pkg = pkgResidues(app)
+        for item in pkg.items { offer(item) }
+        notes.append(contentsOf: pkg.notes)
+        // 收据只查一次：pkgResidues 内部已经调过 pkgutil --file-info，
+        // 以前这里又调一遍，白搭一次进程启动
+        if !app.bundleID.isEmpty, let id = pkg.pkgID {
+            notes.append("安装包收据：\(id)（卸载后可执行 pkgutil --forget \(id) 清理）")
+        }
 
-        var items = Array(buckets.values).sorted { $0.size > $1.size }
+        let appItem = ResidueItem(
+            path: app.path,
+            label: "应用程序",
+            confidence: .high,
+            size: app.size > 0 ? app.size : size(of: app.path),
+            privileged: Safety.needsAdmin(app.path),
+            selected: true
+        )
+
+        return Collected(
+            app: app,
+            candidates: Array(candidates.values),
+            notes: notes,
+            appItem: appItem,
+            local: localFiles(for: app)
+        )
+    }
+
+    /// `sizes` 传 nil 表示「体积还没算」，先给个占位
+    static func assemble(_ collected: Collected, sizes: [Int64]?) -> ScanPlan {
+        var notes = collected.notes
+
+        var items: [ResidueItem]
+        if let sizes, sizes.count == collected.candidates.count {
+            items = zip(collected.candidates, sizes).map { candidate, bytes in
+                ResidueItem(
+                    path: candidate.path,
+                    label: candidate.label,
+                    confidence: candidate.confidence,
+                    size: bytes,
+                    privileged: Safety.needsAdmin(candidate.path)
+                )
+            }
+            items.sort { $0.size > $1.size }
+        } else {
+            items = collected.candidates.map { candidate in
+                ResidueItem(
+                    path: candidate.path,
+                    label: candidate.label,
+                    confidence: candidate.confidence,
+                    size: 0,
+                    privileged: Safety.needsAdmin(candidate.path)
+                )
+            }
+        }
 
         var privileged: [ResidueItem] = []
         var clean: [ResidueItem] = []
@@ -478,29 +618,37 @@ enum Scanner {
                 clean.append(item)
             }
         }
-        items = clean
-
-        if !app.bundleID.isEmpty, let pkg = pkgID(for: app.path) {
-            notes.append("安装包收据：\(pkg)（卸载后可执行 pkgutil --forget \(pkg) 清理）")
-        }
-
-        let appItem = ResidueItem(
-            path: app.path,
-            label: "应用程序",
-            confidence: .high,
-            size: app.size > 0 ? app.size : size(of: app.path),
-            privileged: Safety.needsAdmin(app.path),
-            selected: true
-        )
 
         return ScanPlan(
-            app: app,
-            appItem: appItem,
-            items: items,
+            app: collected.app,
+            appItem: collected.appItem,
+            items: clean,
             privileged: privileged,
             notes: notes,
-            localFiles: localFiles(for: app)
+            localFiles: collected.local,
+            sizesPending: sizes == nil
         )
+    }
+
+    static func scan(_ app: AppInfo, includeLow: Bool,
+                     onPartial: ((ScanPlan) -> Void)? = nil) -> ScanPlan {
+        let collected = collect(app, includeLow: includeLow)
+
+        if let onPartial {
+            onPartial(assemble(collected, sizes: nil))
+        }
+
+        // 各目录互不重叠，拆开算没有依赖，多核能把「几个大容器」摊到几路
+        let unique = collected.candidates
+        var sizes = [Int64](repeating: 0, count: unique.count)
+        if !unique.isEmpty {
+            sizes.withUnsafeMutableBufferPointer { buffer in
+                DispatchQueue.concurrentPerform(iterations: unique.count) { i in
+                    buffer[i] = size(of: unique[i].path)
+                }
+            }
+        }
+        return assemble(collected, sizes: sizes)
     }
 
     // MARK: - 用户自己创建的本地文件
@@ -601,17 +749,29 @@ enum Scanner {
         return (result as NSString).expandingTildeInPath
     }
 
-    static func makeItem(_ path: String, label: String, confidence: Confidence) -> ResidueItem? {
+    /// 候选条目：只确认存在，体积留到去重之后统一算
+    struct Candidate {
+        var path: String
+        var label: String
+        var confidence: Confidence
+    }
+
+    static func candidate(_ path: String, label: String, confidence: Confidence) -> Candidate? {
         let standardized = (path as NSString).standardizingPath
         guard FileManager.default.fileExists(atPath: standardized)
             || (try? FileManager.default.destinationOfSymbolicLink(atPath: standardized)) != nil
         else { return nil }
+        return Candidate(path: standardized, label: label, confidence: confidence)
+    }
+
+    static func makeItem(_ path: String, label: String, confidence: Confidence) -> ResidueItem? {
+        guard let c = candidate(path, label: label, confidence: confidence) else { return nil }
         return ResidueItem(
-            path: standardized,
-            label: label,
-            confidence: confidence,
-            size: size(of: standardized),
-            privileged: Safety.needsAdmin(standardized)
+            path: c.path,
+            label: c.label,
+            confidence: c.confidence,
+            size: size(of: c.path),
+            privileged: Safety.needsAdmin(c.path)
         )
     }
 
@@ -689,22 +849,51 @@ enum Scanner {
     }
 
     static func pkgID(for path: String) -> String? {
-        guard let output = run("/usr/sbin/pkgutil", ["--file-info", path]) else { return nil }
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("pkgid:") {
-                let value = trimmed.dropFirst("pkgid:".count).trimmingCharacters(in: .whitespaces)
-                return value.isEmpty ? nil : value
+        // `pkgutil --file-info` 要起一个进程，40 ms 起步。
+        // 绝大多数应用根本没有收据，而这个结果在一次会话里不会变，缓存住。
+        pkgIDCacheLock.lock()
+        if let hit = pkgIDCache[path] {
+            pkgIDCacheLock.unlock()
+            return hit == pkgIDNoReceipt ? nil : hit
+        }
+        pkgIDCacheLock.unlock()
+
+        var found: String?
+        if let output = run("/usr/sbin/pkgutil", ["--file-info", path]) {
+            for line in output.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("pkgid:") {
+                    let value = trimmed.dropFirst("pkgid:".count).trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { found = value }
+                    break
+                }
             }
         }
-        return nil
+
+        pkgIDCacheLock.lock()
+        pkgIDCache[path] = found ?? pkgIDNoReceipt
+        pkgIDCacheLock.unlock()
+        return found
     }
 
-    static func pkgResidues(_ app: AppInfo) -> ([ResidueItem], [String]) {
-        guard let pkg = pkgID(for: app.path) else { return ([], []) }
-        guard let output = run("/usr/sbin/pkgutil", ["--files", pkg]) else { return ([], []) }
+    private static let pkgIDNoReceipt = "-"
+    private static let pkgIDCacheLock = NSLock()
+    nonisolated(unsafe) private static var pkgIDCache: [String: String] = [:]
 
-        var items: [ResidueItem] = []
+    struct PkgResidues {
+        var items: [Candidate]
+        var notes: [String]
+        /// 查到的收据 id，调用方复用它写提示，省一次 `pkgutil --file-info`
+        var pkgID: String?
+    }
+
+    static func pkgResidues(_ app: AppInfo) -> PkgResidues {
+        guard let pkg = pkgID(for: app.path) else { return PkgResidues(items: [], notes: [], pkgID: nil) }
+        guard let output = run("/usr/sbin/pkgutil", ["--files", pkg]) else {
+            return PkgResidues(items: [], notes: [], pkgID: pkg)
+        }
+
+        var items: [Candidate] = []
         var notes: [String] = []
         for line in output.split(separator: "\n") {
             var path = line.trimmingCharacters(in: .whitespaces)
@@ -717,11 +906,11 @@ enum Scanner {
                 notes.append("安装包文件不在可操作范围（\(check.reason)）：\(path)")
                 continue
             }
-            if let item = makeItem(path, label: "安装包文件", confidence: .high) {
+            if let item = candidate(path, label: "安装包文件", confidence: .high) {
                 items.append(item)
             }
         }
-        return (items, notes)
+        return PkgResidues(items: items, notes: notes, pkgID: pkg)
     }
 
     static func run(_ launchPath: String, _ args: [String]) -> String? {
@@ -739,5 +928,97 @@ enum Scanner {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - 扫描计时（`--scan-timing <应用名>`）
+
+    /// 把 `scan()` 拆成阶段逐个计时，并对比冷 / 热缓存。
+    /// 排查「扫一个 20 KB 的应用为什么要好几秒」时用的。
+    static func timingReport(_ query: String) {
+        let all = discoverApps()
+        guard let target = all.first(where: {
+            $0.name.localizedCaseInsensitiveContains(query) || $0.path.localizedCaseInsensitiveContains(query)
+        }) else {
+            print("没找到匹配「\(query)」的应用。候选：")
+            for a in all.prefix(20) { print("  \(a.name)  [\(a.path)]") }
+            return
+        }
+
+        print("目标：\(target.name)")
+        print("  路径：\(target.path)")
+        print("  bundle id：\(target.bundleID.isEmpty ? "（无）" : target.bundleID)")
+
+        // 阶段计时
+        var phases: [(String, Double)] = []
+        var clock = Date()
+        func tick(_ label: String) {
+            phases.append((label, Date().timeIntervalSince(clock)))
+            clock = Date()
+        }
+
+        clock = Date()
+        let rules = loadRules()
+        tick("读取规则表（\(rules.templates.count) 模板 / \(rules.globs.count) 通配）")
+
+        let ctx: [String: String] = [
+            "name": target.name, "bundle_name": target.name, "bundle_id": target.bundleID
+        ]
+        var hit = 0
+        for tpl in rules.templates {
+            if tpl.path.contains("{bundle_id}") && target.bundleID.isEmpty { continue }
+            guard let filled = fill(tpl.path, ctx) else { continue }
+            if candidate(filled, label: tpl.label, confidence: .medium) != nil { hit += 1 }
+        }
+        tick("展开规则模板（命中 \(hit) 项）")
+
+        var globHits = 0
+        for glob in rules.globs {
+            if glob.pattern.contains("{bundle_id}") && target.bundleID.isEmpty { continue }
+            guard let filled = fill(glob.pattern, ctx) else { continue }
+            for path in expandGlob(filled) {
+                if candidate(path, label: glob.label, confidence: .medium) != nil { globHits += 1 }
+            }
+        }
+        tick("展开通配规则（命中 \(globHits) 项）")
+
+        let pkg = pkgResidues(target)
+        tick("安装包收据（\(pkg.items.count) 个文件）")
+
+        let local = localFiles(for: target)
+        tick("本地文件（\(local.count) 项）")
+
+        // 完整流程：冷缓存（清单就绪 + 体积全部算完）与热缓存
+        clearSizeCache()
+        var partialAt: Double = -1
+        let t0 = Date()
+        timingEnabled = true
+        slowSizes = []
+        _ = scan(target, includeLow: false) { _ in
+            if partialAt < 0 { partialAt = Date().timeIntervalSince(t0) }
+        }
+        timingEnabled = false
+        let cold = Date().timeIntervalSince(t0)
+
+        let t1 = Date()
+        _ = scan(target, includeLow: false)
+        let warm = Date().timeIntervalSince(t1)
+
+        print("\n阶段耗时：")
+        for (label, dt) in phases {
+            print(String(format: "  %6.0f ms  %@", dt * 1000, label))
+        }
+        print(String(format: "\n完整 scan()："))
+        print(String(format: "  %6.0f ms  清单就绪（用户看到列表）", partialAt * 1000))
+        print(String(format: "  %6.0f ms  冷缓存跑完（含算体积）", cold * 1000))
+        print(String(format: "  %6.0f ms  热缓存再跑一遍", warm * 1000))
+
+        if !slowSizes.isEmpty {
+            print("\n最慢的体积计算（冷缓存）：")
+            for item in slowSizes.sorted(by: { $0.seconds > $1.seconds }).prefix(6) {
+                print(String(format: "  %6.0f ms  %5d 文件  %@", item.seconds * 1000, item.files, item.path))
+            }
+            print(String(format: "体积计算合计 %.0f ms，调用 %d 次",
+                         slowSizes.reduce(0) { $0 + $1.seconds } * 1000, slowSizes.count))
+        }
     }
 }

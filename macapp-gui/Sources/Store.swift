@@ -152,17 +152,39 @@ final class Store: ObservableObject {
 
     // MARK: - 应用列表
 
-    /// 分两阶段：先出体积让界面立刻可用，再在后台补最后使用时间、缓存、系统判定。
-    /// 一次性做完要 4~6 秒，期间界面是空的，体验很差。
+    /// 分三阶段：先把清单甩出来，再逐个填体积，最后在后台补使用时间 / 缓存 / 系统判定。
+    /// 一次性做完要好几秒，期间界面是空的，体验很差。
     func refresh() {
+        // 列表重扫意味着磁盘状态可能已经变了（刚删过东西），体积缓存整体作废
+        Scanner.clearSizeCache()
         scanToken += 1
         isBusy = true
         status = "正在扫描已安装应用…"
         let token = scanToken
         DispatchQueue.global(qos: .userInitiated).async {
             var list = Scanner.discoverApps()
+
+            // 阶段 0：清单先显示出来。读 Info.plist 很便宜，慢的是后面算体积，
+            // 没必要让用户对着空列表等
+            let justDiscovered = list
+            DispatchQueue.main.async {
+                guard token == self.scanToken else { return }
+                self.apps = justDiscovered
+                self.status = "正在统计体积 0/\(justDiscovered.count)…"
+            }
+
+            // 阶段 1：逐个算本体体积，每 10 个推一次
             for index in list.indices {
                 list[index].size = Scanner.size(of: list[index].path)
+                if index % 10 == 9 {
+                    let partial = list
+                    let done = index + 1
+                    DispatchQueue.main.async {
+                        guard token == self.scanToken else { return }
+                        self.apps = partial
+                        self.status = "正在统计体积 \(done)/\(partial.count)…"
+                    }
+                }
             }
             let firstPass = list
 
@@ -211,16 +233,47 @@ final class Store: ObservableObject {
         status = "正在扫描 \(app.name) 的残留文件…"
         let includeLow = self.includeLow
         DispatchQueue.global(qos: .userInitiated).async {
-            let scanned = Scanner.scan(app, includeLow: includeLow)
+            // 清单先出来（毫秒级），体积再在后台填。
+            // 冷缓存下遍历一个 686 MB 的容器要好几秒，不该让界面一直转圈。
+            let scanned = Scanner.scan(app, includeLow: includeLow) { partial in
+                DispatchQueue.main.async {
+                    guard self.selectedID == id else { return }
+                    self.plan = partial
+                    self.isBusy = false
+                    self.status = ""
+                }
+            }
             DispatchQueue.main.async {
-                self.plan = scanned
+                guard self.selectedID == id else { return }
+                self.plan = self.mergingSelection(from: self.plan, into: scanned)
                 self.isBusy = false
                 self.status = ""
             }
         }
     }
 
+    /// 体积回填时整份 plan 会被替换，用户在等待期间勾的东西要保住
+    private func mergingSelection(from old: ScanPlan?, into new: ScanPlan) -> ScanPlan {
+        guard let old else { return new }
+        func apply(_ items: [ResidueItem], _ oldItems: [ResidueItem]) -> [ResidueItem] {
+            let picked = Dictionary(uniqueKeysWithValues: oldItems.map { ($0.path, $0.selected) })
+            return items.map { item in
+                guard let selected = picked[item.path] else { return item }
+                var copy = item
+                copy.selected = selected
+                return copy
+            }
+        }
+        var merged = new
+        merged.items = apply(new.items, old.items)
+        merged.privileged = apply(new.privileged, old.privileged)
+        merged.localFiles = apply(new.localFiles, old.localFiles)
+        return merged
+    }
+
     func rescan() {
+        // 手动重扫是「我不信刚才那个数」，别拿缓存糊弄
+        Scanner.clearSizeCache()
         if let id = selectedID { select(id) }
     }
 
