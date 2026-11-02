@@ -6,12 +6,18 @@ macOS 上的软件安装 / 卸载 / 残留清理工具。原生 SwiftUI 图形�
 
 ![界面](macapp-gui/docs/screenshot.png)
 
-## 两个版本
+## 三个版本
 
 | 目录 | 形态 | 说明 |
 | --- | --- | --- |
-| [`macapp-gui/`](macapp-gui/) | SwiftUI 图形应用 | 主力版本，打包成 `.app` / `.dmg`，双击即用 |
+| [`macapp-gui/`](macapp-gui/) | SwiftUI 图形应用 | 独立的软件管家，打包成 `.app` / `.dmg`，双击即用 |
+| [`macmonitor/`](macmonitor/) | SwiftUI 菜单栏应用 | **整合版**：系统监测（CPU / 内存 / 网络 / 温度 / 进程）+ 软件管家，合成一个 app |
 | [`macapp/`](macapp/) | Python 命令行 | 早期版本，逻辑与 GUI 版一致，适合脚本化和审计 |
+
+`macapp-gui` 和 `macmonitor` 共用同一套卸载引擎——整合版的 `Sources/Manager/`
+就是 `macapp-gui/Sources/` 并进去的，只改了三处命名冲突
+（`AppInfo` → `ManagedApp`、`Store` → `ManagerStore`、去掉它自己的 `@main`），
+逻辑一行没动，自检 338 项两边逐项一致。
 
 两边的卸载记录格式相同（`~/.macapp/history/*.json`），可以互相还原。
 
