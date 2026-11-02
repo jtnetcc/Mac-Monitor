@@ -10,6 +10,7 @@ macOS 菜单栏系统监测工具，**内置软件管理**（安装 / 卸载 / �
 ## 快速开始
 
 ```sh
+chmod +x build.sh package.sh     # 从 git 拉下来的脚本没有可执行位
 ./build.sh                       # → build/MacMonitor.app
 open build/MacMonitor.app        # 菜单栏出现圆环
 ```
@@ -637,7 +638,7 @@ MacMonitor/
 ├── build.sh                     # 编译 + 组装 bundle + ad-hoc 签名
 ├── package.sh                   # 生成图标 → 打 DMG / PKG
 ├── Info.plist                   # LSUIElement=YES（不占 Dock）
-├── Assets/AppIcon.icns          # 打包时由 app 自己画出来
+├── Assets/AppIcon.icns          # 打包时由 app 自己画出来（不入库）
 ├── Resources/rules.json         # 软件管理的卸载规则表（进 bundle 供 Scanner 读）
 └── Sources/
     ├── Models.swift             # 数据模型、格式化、多分辨率历史缓冲
@@ -659,8 +660,7 @@ MacMonitor/
         ├── ManagerFinderBridge.swift # 让访达代删（TCC 兜底）
         ├── ManagerStore.swift        # 软件管理状态机
         ├── ManagerViews.swift        # 管家全部界面
-        ├── ManagerSelfTest.swift     # 338 项自检
-        └── ManagerSnapshot.swift     # 管家原来的离屏截图工具
+        └── ManagerSelfTest.swift     # 338 项自检
 ```
 
 ## 调试参数
