@@ -24,6 +24,25 @@
 
 ---
 
+## 下载
+
+[Releases](https://github.com/jtnetcc/mac-software-manager/releases) 里有打包好的 dmg，不用 clone：
+
+| 版本 | 下载 | 说明 |
+| --- | --- | --- |
+| **整合版 v1.3** | [`MacMonitor-1.3.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/macmonitor-v1.3/MacMonitor-1.3.dmg) | 系统监测 + 软件管理，macOS 14+ / arm64，1.9 MB |
+| 软件管家 v1.4 | [`MacAppManager-1.4.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/v1.4/MacAppManager-1.4.dmg) | 只有软件管理，没有监测 |
+
+```sh
+shasum -a 256 MacMonitor-1.3.dmg
+# dbb98d762cee516f357a146fee56159e07275cab38e67bbc9e7d3d2a1d3da638
+```
+
+> 两个都是 ad-hoc 签名、没有经过公证，首次打开会被 Gatekeeper 拦一次：
+> 右键点图标 →「打开」→ 再点「打开」。
+> 软件管理要清沙盒容器，还得给 Mac Monitor 开「完全磁盘访问权限」，
+> 详见下面的[软件管理](#软件管理整合自-mac-software-manager)。
+
 ## 运行
 
 ```bash
