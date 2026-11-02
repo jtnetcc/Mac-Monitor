@@ -26,12 +26,12 @@
 
 ## 下载
 
-[Releases](https://github.com/jtnetcc/mac-software-manager/releases) 里有打包好的 dmg，不用 clone：
+[Releases](https://github.com/jtnetcc/Mac-Monitor/releases) 里有打包好的 dmg，不用 clone：
 
 | 版本 | 下载 | 说明 |
 | --- | --- | --- |
-| **整合版 v1.3** | [`MacMonitor-1.3.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/macmonitor-v1.3/MacMonitor-1.3.dmg) | 系统监测 + 软件管理，macOS 14+ / arm64，1.9 MB |
-| 软件管家 v1.4 | [`MacAppManager-1.4.dmg`](https://github.com/jtnetcc/mac-software-manager/releases/download/v1.4/MacAppManager-1.4.dmg) | 只有软件管理，没有监测 |
+| **整合版 v1.3** | [`MacMonitor-1.3.dmg`](https://github.com/jtnetcc/Mac-Monitor/releases/download/macmonitor-v1.3/MacMonitor-1.3.dmg) | 系统监测 + 软件管理，macOS 14+ / arm64，1.9 MB |
+| 软件管家 v1.4 | [`MacAppManager-1.4.dmg`](https://github.com/jtnetcc/Mac-Monitor/releases/download/v1.4/MacAppManager-1.4.dmg) | 只有软件管理，没有监测 |
 
 ```sh
 shasum -a 256 MacMonitor-1.3.dmg
@@ -41,7 +41,7 @@ shasum -a 256 MacMonitor-1.3.dmg
 > 两个都是 ad-hoc 签名、没有经过公证，首次打开会被 Gatekeeper 拦一次：
 > 右键点图标 →「打开」→ 再点「打开」。
 > 软件管理要清沙盒容器，还得给 Mac Monitor 开「完全磁盘访问权限」，
-> 详见下面的[软件管理](#软件管理整合自-mac-software-manager)。
+> 详见下面的[软件管理](#软件管理整合自-macapp-gui)。
 
 ## 运行
 
@@ -205,7 +205,7 @@ $BIN --stats-run --open-window    # 带上详情窗口
 - **详情页** — 8 个页面，点主面板任意卡片进入
 - **菜单栏指标** — CPU / 内存 / 网络 / 温度四选一，圆环与文字跟着换
 - **系统工具** — 打开活动监视器、重启 Finder、清空 DNS 缓存、回收内存
-- **软件管理** — 安装 / 卸载 / 残留清理 / 推荐卸载 / 占用分析（整合自 mac-software-manager）
+- **软件管理** — 安装 / 卸载 / 残留清理 / 推荐卸载 / 占用分析（整合自 macapp-gui）
 
 ## 详情窗口
 
@@ -342,10 +342,10 @@ CPU / 内存 / 名称 / PID 四种排序，搜索框同时匹配进程名、PID�
 右键菜单 →「系统工具」：打开活动监视器、重启 Finder、清空 DNS 缓存、回收内存。
 后两项需要 root，走 `osascript` 授权；结果同样用提示条回报。
 
-## 软件管理（整合自 mac-software-manager）
+## 软件管理（整合自 macapp-gui）
 
 详情窗口左侧「软件」分区，代码在 `Sources/Manager/`，来自
-[mac-software-manager](https://github.com/jtnetcc/mac-software-manager) 的 `macapp-gui`。
+本仓库 [`macapp-gui/`](macapp-gui/) 的引擎。
 那块原本是个独立 app（`@main` + `WindowGroup`），并进来只保留了它的 `ContentView`，
 入口交给 `Section.software`。
 
@@ -664,7 +664,7 @@ macmonitor/
     ├── WindowViews.swift        # 详情窗口 8 个分区 + 进程表 / 详情弹层
     ├── SoftwareView.swift       # 「软件」分区的接线（把管家 ContentView 塞进窗口）
     ├── main.swift               # 菜单栏 + 面板 + 快捷键 + 图标渲染 + 调试模式
-    └── Manager/                 # 软件管理（整合自 mac-software-manager）
+    └── Manager/                 # 软件管理（整合自 macapp-gui）
         ├── ManagerModel.swift        # ManagedApp / 残留项 / 推荐引擎
         ├── ManagerScanner.swift      # 应用发现 + 文件归属匹配（含 rules.json）
         ├── ManagerOrphanScanner.swift# 残留扫描
