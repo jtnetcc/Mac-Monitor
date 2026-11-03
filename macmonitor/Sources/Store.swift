@@ -217,6 +217,8 @@ final class MetricsStore: ObservableObject {
     private func fire(_ event: AlertEvent, now: TimeInterval, key: String) {
         lastFired[key] = now
         alert = event
+        // 提示音只在这里响：canFire 已经把重复告警挡在外面了
+        SoundAlert.play(event.level, key: key, now: now)
         let id = event.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
             if self?.alert?.id == id { self?.alert = nil }

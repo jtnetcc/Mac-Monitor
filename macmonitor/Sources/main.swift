@@ -30,8 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastRingAlert: Int = -1
 
     private let panelWidth: CGFloat = 342
-    private let panelHeight: CGFloat = 392
-    private let panelHeightWithAlert: CGFloat = 437
+    private let panelHeight: CGFloat = 348
+    private let panelHeightWithAlert: CGFloat = 393
 
     private var targetHeight: CGFloat {
         store.alert != nil ? panelHeightWithAlert : panelHeight
@@ -311,6 +311,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         displayItem.submenu = displayMenu
         menu.addItem(displayItem)
 
+        // 告警提示音开关
+        let soundItem = NSMenuItem(title: "告警提示音", action: #selector(menuToggleSound), keyEquivalent: "")
+        soundItem.target = self
+        soundItem.state = SoundAlert.isEnabled ? .on : .off
+        menu.addItem(soundItem)
+
         // 顺手能用的系统操作
         let toolsItem = NSMenuItem(title: "系统工具", action: nil, keyEquivalent: "")
         let toolsMenu = NSMenu()
@@ -335,6 +341,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         menu.addItem(item)
+    }
+
+    @objc private func menuToggleSound() {
+        SoundAlert.isEnabled.toggle()
+        // 打开时立刻响一下，不然用户不知道它到底是什么声音
+        if SoundAlert.isEnabled { SoundAlert.preview() }
+        store.showToast(SoundAlert.isEnabled ? "告警提示音已开启" : "告警提示音已关闭",
+                        ok: SoundAlert.isEnabled)
     }
 
     @objc private func menuOpenProcesses() {
@@ -496,7 +510,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         effect.autoresizingMask = [.width, .height]
 
-        let hosting = NSHostingView(rootView: DashboardView(store: store, onOpen: { [weak self] sec in self?.openWindow(sec) }))
+        // 面板用「排版」这一版：三个大数字 + 细曲线，靠字号和留白建立层次。
+        // 旧的 DashboardView 还在，--panel-style current 可以渲出来对比
+        let hosting = NSHostingView(rootView: PanelEditorialView(store: store, onOpen: { [weak self] sec in self?.openWindow(sec) }))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         hosting.setFrameSize(NSSize(width: panelWidth, height: panelHeight))
         effect.addSubview(hosting)
@@ -649,8 +665,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - 快照模式（用于导出界面预览图）
 
 @MainActor
-func renderSnapshot(store: MetricsStore, to path: String, tab: ChartTab? = nil) {
-    let content = DashboardView(store: store, forceTab: tab)
+func renderSnapshot(store: MetricsStore, to path: String, tab: ChartTab? = nil,
+                    style: PanelStyle = .editorial) {
+    let content = Group {
+        switch style {
+        case .current: DashboardView(store: store, forceTab: tab)
+        case .cards:   PanelCardsView(store: store, forceTab: tab)
+        case .rings:   PanelRingsView(store: store, forceTab: tab)
+        case .rows:    PanelRowsView(store: store, forceTab: tab)
+        case .hero:      PanelHeroView(store: store, forceTab: tab)
+        case .dual:      PanelDualView(store: store, forceTab: tab)
+        case .editorial: PanelEditorialView(store: store, forceTab: tab)
+        }
+    }
         .background(Dark.panel)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
@@ -915,6 +942,21 @@ if args.contains("--recommend") {
     exit(0)
 }
 
+if args.contains("--sound-test") {
+    app.setActivationPolicy(.accessory)
+    print("警告音（Glass）…")
+    SoundAlert.preview(.warn)
+    Thread.sleep(forTimeInterval: 1.2)
+    print("危险音（Basso）…")
+    SoundAlert.preview(.danger)
+    Thread.sleep(forTimeInterval: 1.2)
+    let glass = NSSound(named: NSSound.Name("Glass")) != nil
+    let basso = NSSound(named: NSSound.Name("Basso")) != nil
+    print("音效文件：Glass=\(glass ? "✓" : "✗")  Basso=\(basso ? "✓" : "✗")")
+    print("当前开关状态: \(SoundAlert.isEnabled ? "开" : "关")")
+    exit(0)
+}
+
 if let i = args.firstIndex(of: "--scan-timing") {
     app.setActivationPolicy(.prohibited)
     let query = args.count > i + 1 ? args[i + 1] : ""
@@ -1011,8 +1053,13 @@ if let i = args.firstIndex(of: "--iconset"), i + 1 < args.count {
     store.samplingInterval = 0.4
     store.start()
 
-    // 跑 16 秒，让历史曲线有足够数据点
-    let deadline = Date().addingTimeInterval(16)
+    // 默认跑 16 秒，让历史曲线有足够数据点。
+    // 采样间隔 0.4s 时 60 个点要 24 秒才填满，要看满曲线就传 --wait 30
+    let waitIndex = args.firstIndex(of: "--wait")
+    let waitSeconds = waitIndex.flatMap { i -> Double? in
+        args.count > i + 1 ? Double(args[i + 1]) : nil
+    } ?? 16
+    let deadline = Date().addingTimeInterval(waitSeconds)
     let demoAlert = args.contains("--demo-alert")
     let forceTab: ChartTab? = args.contains("--tab-temp") ? .temp : nil
 
@@ -1026,8 +1073,13 @@ if let i = args.firstIndex(of: "--iconset"), i + 1 < args.count {
                                      level: .warn)
         }
     }
+    let styleName = args.firstIndex(of: "--panel-style").flatMap { i -> String? in
+        args.count > i + 1 ? args[i + 1] : nil
+    } ?? "editorial"
+    let style = PanelStyle(rawValue: styleName) ?? .editorial
+
     MainActor.assumeIsolated {
-        renderSnapshot(store: store, to: outPath, tab: forceTab)
+        renderSnapshot(store: store, to: outPath, tab: forceTab, style: style)
     }
 
     // 自测：报告采样引擎自身的 CPU 开销

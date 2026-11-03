@@ -512,10 +512,12 @@ struct DashboardView: View {
 // 悬停时右侧浮出 ✕ 直接结束；右键是完整菜单。
 // ✕ 常驻占位（透明），避免悬停时整行宽度跳动。
 
-private struct PanelProcRow: View {
+struct PanelProcRow: View {
     let p: ProcSample
     let index: Int
     var onKill: (Bool) -> Void
+    /// 精简面板的新样式用，行高压一点、字号小半号
+    var dense: Bool = false
 
     @State private var hover = false
 
@@ -524,14 +526,14 @@ private struct PanelProcRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(p.name)
-                .font(.system(size: 10.5))
+                .font(.system(size: dense ? 10 : 10.5))
                 .foregroundStyle(Dark.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(p.hasMetrics ? String(format: "%.1f%%", p.cpu) : "—")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: dense ? 9.5 : 10, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(!p.hasMetrics ? Dark.faint
                                  : (p.cpu >= 30 ? Dark.red : (p.cpu >= 8 ? Dark.amber : Dark.dim)))
@@ -557,7 +559,7 @@ private struct PanelProcRow: View {
             .disabled(blocked != nil)
             .help(blocked ?? "结束进程")
         }
-        .padding(.vertical, 3.5)
+        .padding(.vertical, dense ? 2.5 : 3.5)
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(hover ? Color.white.opacity(0.05)
