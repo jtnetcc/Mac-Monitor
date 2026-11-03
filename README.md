@@ -30,15 +30,13 @@
 
 | 版本 | 下载 | 说明 |
 | --- | --- | --- |
-| **整合版 v1.3** | [`MacMonitor-1.3.dmg`](https://github.com/jtnetcc/Mac-Monitor/releases/download/macmonitor-v1.3/MacMonitor-1.3.dmg) | 系统监测 + 软件管理，macOS 14+ / arm64，1.9 MB |
+| **整合版 v1.6** | [`MacMonitor-1.6.dmg`](https://github.com/jtnetcc/Mac-Monitor/releases/download/macmonitor-v1.6/MacMonitor-1.6.dmg) | 系统监测 + 软件管理，macOS 14+ / arm64，2.0 MB |
 | 软件管家 v1.4 | [`MacAppManager-1.4.dmg`](https://github.com/jtnetcc/Mac-Monitor/releases/download/v1.4/MacAppManager-1.4.dmg) | 只有软件管理，没有监测 |
 
 ```sh
-shasum -a 256 MacMonitor-1.3.dmg
-# dbb98d762cee516f357a146fee56159e07275cab38e67bbc9e7d3d2a1d3da638
+shasum -a 256 MacMonitor-1.6.dmg
+# fa7a6e70d07a6779ffbc8e1637062bd11f798ed2e831121e2b35ca998e8c6432
 ```
-
-> 源码已经到 **v1.6**（面板重做 + 告警提示音），对应的 dmg 还没发；`./package.sh` 可以自己打。
 
 > 两个都是 ad-hoc 签名、没有经过公证，首次打开会被 Gatekeeper 拦一次：
 > 右键点图标 →「打开」→ 再点「打开」。
@@ -82,8 +80,8 @@ open build/MacMonitor.app       # 启动，图标出现在菜单栏
 
 | 文件 | 说明 |
 |---|---|
-| `MacMonitor-1.3.dmg` | 挂载后是「MacMonitor.app + 应用程序快捷方式 + 安装说明.txt」，拖过去即可 |
-| `MacMonitor-1.3.pkg` | 只有显式指定 `pkg`/`all` 才生成，组件包，安装位置 `/Applications` |
+| `MacMonitor-1.6.dmg` | 挂载后是「MacMonitor.app + 应用程序快捷方式 + 安装说明.txt」，拖过去即可 |
+| `MacMonitor-1.6.pkg` | 只有显式指定 `pkg`/`all` 才生成，组件包，安装位置 `/Applications` |
 
 打包流程：**生成图标 → 编译签名 → 校验 → 打 DMG（→ 打 PKG）**。
 
