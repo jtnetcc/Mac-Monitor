@@ -13,7 +13,7 @@
 
 | 目录 | 形态 | 说明 |
 | --- | --- | --- |
-| [`macmonitor/`](macmonitor/) | SwiftUI 菜单栏应用 | **整合版 v1.3**，下面讲的就是它 |
+| [`macmonitor/`](macmonitor/) | SwiftUI 菜单栏应用 | **整合版 v1.6**，下面讲的就是它 |
 | [`macapp-gui/`](macapp-gui/) | SwiftUI 图形应用 | 独立的软件管家 v1.5，只有软件管理，没有监测 |
 | [`macapp/`](macapp/) | Python 命令行 | 早期版本，逻辑与 GUI 版一致，适合脚本化和审计 |
 
@@ -37,6 +37,8 @@
 shasum -a 256 MacMonitor-1.3.dmg
 # dbb98d762cee516f357a146fee56159e07275cab38e67bbc9e7d3d2a1d3da638
 ```
+
+> 源码已经到 **v1.6**（面板重做 + 告警提示音），对应的 dmg 还没发；`./package.sh` 可以自己打。
 
 > 两个都是 ad-hoc 签名、没有经过公证，首次打开会被 Gatekeeper 拦一次：
 > 右键点图标 →「打开」→ 再点「打开」。
